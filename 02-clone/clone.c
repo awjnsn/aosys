@@ -70,6 +70,20 @@ int child_entry(void* arg) {
     syscall_write(": gettid()  = ", gettid());  // The ID of this thread!
     syscall_write(": getuid()  = ", getuid());  // What is the user id of this thread.
 
+    if (arg != NULL) {
+        // We got a uid_map. So we install it
+        int fd = open("/proc/self/uid_map", O_RDWR);
+        char *uid_map = (char*) arg;
+        write(fd, uid_map, strlen(uid_map));
+        close(fd);
+
+        // With the uid_map in place, we have become 'root' in our
+        // namespace, as the PID from outside maps to the UID=0 within
+        // the namespace. So, we've become root... but not for real!
+        syscall_write(": getuid()  = ", getuid());
+        syscall_write(": setuid() = ", setuid(0));
+    }
+
     // We increment the global counter in one second intervals. If we
     // are in our own address space, this will have no influence on
     // the parent!
@@ -101,12 +115,45 @@ int main(int argc, char *argv[]) {
     int flags = 0;
     void *arg = NULL;
     if (!strcmp(argv[1], "fork")) {
-        // TODO: Implement multiple clone modes.
+        // For a fork, we usually want to recieve a SIGCHLD signal if
+        // the child's process group terminates.
+        flags = SIGCHLD;
+    } else if (!strcmp(argv[1], "chimera")) {
+        // For the chimera, we _only_ share the virtual memory with
+        // the child process. Thereby, a new process but with the same
+        // address space is created.
+        flags = SIGCHLD | CLONE_VM;
+    } else if (!strcmp(argv[1], "thread")) {
+        // For a real thread, we also put the child in the same thread
+        // group. Please note that Linux requires us to also share the
+        // signal handler table, if two threads want to live in the
+        // same thread group.
+        flags = CLONE_VM | CLONE_THREAD | CLONE_SIGHAND;
+    } else if (!strcmp(argv[1], "user")) {
+        // For the UID namespace, we just do a fork, but request a new
+        // user namespace for it.
+        flags = SIGCHLD | CLONE_NEWUSER;
+
+        // In order to actually use this new namespace, we have to
+        // install a simple uid_map. Tomake our life easy, we just
+        // create the uid_map within the parent, pass it as argument
+        // to clone and write it there to the /proc/self/uid_map
+        // pseudo file.
+        arg = malloc(100);
+        snprintf((char*)arg, 99, "0 %d 1\n", getuid());
     } else {
         printf("Invalid clone() mode: %s\n", argv[1]);
         return -1;
     }
-    // TODO: Call clone here!
+
+    // For the clone system call, we specify the start address, and
+    // pass a pointer to the _top_ of stack.
+    pid_t pid = clone(child_entry, &stack[sizeof(stack)-1], flags, arg);
+    if (pid == -1) {
+        perror("clone");
+        return -1;
+    }
+    syscall_write("> clone() returned ", pid);
 
     syscall_write("\n!!!!! Press C-c to terminate. !!!!!", 0);
     while(counter < 4) {
