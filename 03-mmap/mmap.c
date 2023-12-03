@@ -42,8 +42,67 @@ struct /* anonymous */ {
 int barfoo = 42;
 
 int setup_persistent(char *fn) {
-    // FIXME: Install persistent mapping and return 0;
-    return -1;
+    // We first stat the file, before we open it with the O_CREAT
+    // flag, whereby we can determine lateron, if the file has
+    // existsted beforehand. 
+    struct stat s;
+    int rc = stat(fn, &s);
+    int fd = open(fn, O_RDWR|O_CREAT, 0600);
+
+    // We could not open/create the file. This is not good and we
+    // cannot and do not want to recover from it.
+    if (fd < 0)
+        return -1;
+
+    // If stat failed, the file did not exist beforehand, and we want
+    // to initialize our backing storage. We also initialize the file,
+    // if its size is different from out persistent size.
+    if (rc == -1 || s.st_size != sizeof(psec)) {
+        // First, we shrink/expand the file to the correct size. We
+        // use ftruncate(2) for this
+        if (ftruncate(fd, sizeof(psec)) != 0)
+            return -1;
+
+        // We copy the contents of the initialized persistent section
+        // from the DRAM to the file, by writing it into the file descriptor
+        if (write(fd, &psec, sizeof(psec)) != sizeof(psec))
+            return -1;
+
+        // We have initialized the file.
+    }
+
+    // We replace the memory at &psec with the contents of our file.
+    // But unlike read(), resulting mapping is synchronized with the
+    // file contents.
+    //
+    // addr: Where do we want our mapping to start. Usually this is
+    //       only a hint.
+    // length: We want to map that many bytes starting at addr
+    // prot: Yes, we want that memory to be read and writable
+    // flags/MAP_SHARED: The mapping should not be a private copy, but
+    //       our modifications should be shared with everybody else.
+    //       (this includes persistence)
+    // flags/MAP_FIXED: The addr is not only a hint, but mmap should fail
+    //       in case the OS cannot install a mapping there.
+    // file: Where should the content for the mapping come from?
+    // offset: offset within the file descriptor
+    int *map = mmap(/* addr */  &psec,
+                    /* length*/ sizeof(psec),
+                    /* prot */  PROT_READ|PROT_WRITE,
+                    /* flags */ MAP_SHARED|MAP_FIXED,
+                    /* file */  fd,
+                    /* offset */ 0);
+    // mmap returns a special pointer (MAP_FAILED) to inidicate that
+    // the operation did not succeed.
+    if (map == MAP_FAILED)
+        return -1;
+
+    // This is interesting: We can close the file descriptor and our
+    // mapping remains in place. Internally, the struct file is not
+    // yet destroyed as the mapping keeps a reference to it.
+    close(fd);
+
+    return 0;
 }
 
 int main(int argc, char *argv[]) {
