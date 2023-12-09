@@ -17,10 +17,26 @@
 // length in *len and an open file descriptor in *fd.
 // On error, the function should return the null pointer;
 char * map_file(char *fn, ssize_t *len, int *fd) {
-    // FIXME: Map file to memory
-    // FIXME: Set *len = ...
-    // FIXME: Set *fd = ...
-    return NULL;
+    // We use stat to check if the file exists and to determine which
+    struct stat s;
+    int rc = stat(fn, &s);
+    if (rc < 0) return NULL;
+
+    // Open the file read only.
+    int _fd = open(fn, O_RDONLY);
+    if (! _fd) return NULL;
+
+    // Map the file as shared and read only somewhere to memory
+    char *map = mmap(NULL, s.st_size, PROT_READ, MAP_SHARED, _fd, 0);
+    // mmap returns a special pointer (MAP_FAILED) to indicate that
+    // the operation did not succeed.
+    if (map == MAP_FAILED)
+        return NULL;
+
+    // We return three value to our caller
+    *len = s.st_size;
+    *fd  = _fd;
+    return map;
 }
 
 // A (very) simple checksum function that calculates and additive checksum over a memory range.
@@ -62,11 +78,52 @@ int main(int argc, char *argv[]) {
     } else {
         fprintf(stderr, "usage: %s [-r] <FILE>\n", argv[0]);
     }
-    // Avoid compiler warnings
-    (void) fn; (void) reset_checksum; (void) xattr;
-    // FIXME: map the file
-    // FIXME: reset the checksum if requested
-    // FIXME: calculate the checksum
-    // FIXME: get the old checksum and perform checking
-    // FIXME: set the new checksum
+    // We map the file to memory, get the length and an open file
+    // descriptor. Later on we will only use the file-descriptor based
+    // variants of {set,remove,get}xattr as that avoids the TOCTOU
+    // (time-of-check, time-of-update) problem.
+    ssize_t len;
+    int fd;
+    char *data = map_file(fn, &len, &fd);
+    if (!data) die("map_file");
+
+    // If we are instructed to remove the checksum, we use
+    // fremovexattr to delete it. For the error checking, we allow it
+    // that the checksum was not set beforehand.
+    if (reset_checksum) {
+        int rc = fremovexattr(fd, xattr);
+        if (rc < 0 && errno != ENODATA) {
+            die("fremovexattr");
+        }
+        return 0;
+    }
+
+    // We are sure that the file is mapped, so we can calcucate the
+    // checksum over the memory mapped file.
+    uint64_t checksum = calc_checksum(data, len);
+    printf("current_checksum: %lx\n", checksum);
+
+    // The final return code
+    int ret  = 0;
+
+    // We get the old checksum from the file. Please note that we
+    // store the checksum as the raw 8 bytes of the uint64_t
+    uint64_t old_checksum;
+    if (fgetxattr(fd, xattr, &old_checksum, sizeof(old_checksum)) != sizeof(old_checksum)) {
+        printf("old_checksum: NULL\n");
+    } else {
+        printf("previous_checksum: %lx\n", old_checksum);
+
+        // On checksum mismatch, we will return an error.
+        if (checksum != old_checksum) {
+            fprintf(stderr, "checksum mismatch!");
+            ret = -1;
+        }
+    }
+
+    // In the end, we override the current checksum.
+    if (fsetxattr(fd, xattr, &checksum, sizeof(checksum), 0) != 0) {
+        die("fsetxattr");
+    }
+    return ret;
 }
