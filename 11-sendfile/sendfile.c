@@ -22,12 +22,56 @@
 ssize_t copy_write(int fd_in, int fd_out, int *syscalls) {
     ssize_t ret = 0;
     *syscalls = 0;
+    // For the read/write copy method, we require a buffer. To not
+    // hinder performance, we use a static function variable to
+    // allocate the buffer once (it is never freed.
+    static size_t bufsize = 128 * 1024; // GNU cp uses 128k Buffers
+    static char  *buffer = NULL;
+    if (!buffer) {
+        buffer = malloc(bufsize);
+        if(!buffer) die("malloc");
+    }
+
+    // The actual copy loop
+    do {
+        // Read up to bufsize bytes.
+        int len = read(fd_in, buffer, bufsize);
+        if (len < 0) die("read");
+        (*syscalls) ++;      // read is a system call
+        if (len == 0) break; // end-of file is reached
+
+        // As write could be short, we loop until all bytes are
+        // written to the output file descriptor.
+        int written = 0;
+        while (written < len) {
+            int wlen = write(fd_out, buffer+written, len-written);
+            if (wlen < 0) die("write");
+            (*syscalls) ++;
+            written += wlen;
+        }
+        // Account for the copied bytes.
+        ret += len;
+    } while(1);
+
     return ret;
 }
 
 ssize_t copy_sendfile(int fd_in, int fd_out, int *syscalls) {
     ssize_t ret = 0;
     *syscalls = 0;
+    
+    // For sendfile, we do not require a buffer, but we can directly
+    // call sendfile on both descriptors. Please note how insane the
+    // order of the arguments (dest, source) is!
+    do {
+        int len = sendfile(fd_out, fd_in, NULL, INT_MAX);
+        if (len < 0) die("sendfile");
+        (*syscalls)++;
+        if (len == 0) break; // end of file
+
+        // Account for the copied bytes
+        ret += len;
+    } while(1);
     return ret;
 }
 
