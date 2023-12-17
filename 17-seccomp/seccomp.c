@@ -41,20 +41,73 @@ typedef struct {
 
 // Spawn a function within a seccomp-restricted child process
 secure_func_t spawn_secure(void (*func)(void*, int), void* arg) {
-    // FIXME: Create a pipe pair with pipe2(2)
-    // FIXME: fork a child process
-    // FIXME: In child, close all file descriptors besides the write end
-    // FIXME: Invoke the given function and kill the child with syscall(__NR_exit, 0)
-    secure_func_t p = {.pid = -1, .pipe = -1};
-    return p;
+    // Create the child pipe.
+    // pipe[1] - the write end
+    // pipe[0] - the read end
+    int    pipe[2];
+    if (pipe2(pipe,  O_CLOEXEC))
+        die("pipe2");
+
+    pid_t pid = fork();
+    if (pid < 0) die("fork");
+    if (pid > 0) { // Parent
+        // Close the write end of the child pipe
+        close(pipe[1]);
+
+        // Create a handle for the called function
+        secure_func_t ret = {.pid = pid, .pipe = pipe[0] };
+        return ret;
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // Child after here
+
+    // dup the pipe write end to the file descriptor 0
+    if (dup2(pipe[1], 0) < 0)
+        die("dup2");
+
+    // Close all file descriptors above 1 (requires Linux 5.9)
+    if (sys_close_range(1, ~0U, 0) == -1) {
+        die("close_range");
+    }
+
+    // Enter the strict seccomp mode. From here on, only read(2),
+    // write(2), _exit(2), and sigreturn(2) are allowed.
+    if (sys_seccomp(SECCOMP_SET_MODE_STRICT, 0, NULL) < 0)
+        die("seccomp");
+
+    // Execute the given function with the given argument and an
+    // output descriptor of 0 (see dup2 above)
+    func(arg, 0);
+
+    // We use the bare exit system call here to kill the child.
+    // Reason for this is, that the glibc calls exit_group(2),
+    // when we call _exit().
+    syscall(__NR_exit, 0);
+
+    // We place this unreachable here to avoid a compiler warning.
+    // This builtin does _not_ generate any code, but it only
+    // signals to the compiler, that we will never come here.
+    __builtin_unreachable();
 }
 
 // Complete a previously spawned function and read at most bulen bytes
 // into buf. The function returns -1 on error or the number of
 // actually read bytes.
 int complete_secure(secure_func_t f, char *buf, size_t buflen) {
-    // FIXME: read from the child pipe
-    // FIXME: waitpid() for the child to exit
+    // Read from the child pipe
+    int len = read(f.pipe, buf, buflen);
+
+    // Wait for the process to exit (or to get killed by the seccomp filter)
+    int wstatus;
+    if (waitpid(f.pid, &wstatus, 0) < 0)
+        return -1;
+
+    // Only if the process exited normally and with exit state 0, the
+    // function might have completed correctly
+    if (WIFEXITED(wstatus) && (WEXITSTATUS(wstatus) == 0)) {
+        return len;
+    }
     return -1;
 }
 
