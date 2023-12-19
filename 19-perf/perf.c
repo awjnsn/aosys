@@ -54,26 +54,63 @@ int sys_perf_event_open(struct perf_event_attr *attr,
 // the group leader. The function returns an id that can be used in
 // combination with perf_event_get.
 perf_event_id perf_event_add(struct perf_handle *p, int type, int config) {
-    // FIXME: Create event with perf_event_open
-    // FIXME: Get perf_event_id with PERF_EVENT_IOC_ID
-    return -1;
+    struct perf_event_attr attr;
+
+    memset(&attr, 0, sizeof(struct perf_event_attr));
+    attr.type = type;
+    attr.size = sizeof(struct perf_event_attr);
+    attr.config = config;
+    attr.disabled = 1;
+    attr.exclude_kernel = 1;
+    attr.exclude_hv = 1;
+    attr.read_format = PERF_FORMAT_GROUP | PERF_FORMAT_ID;
+    int fd = sys_perf_event_open(&attr, 0, -1,
+                             p->group_fd > 0 ? p->group_fd : -1,
+                             0);
+    if (fd < 0) die("perf_event_open");
+    if (p->group_fd <= 0)
+        p->group_fd = fd;
+
+    p->nevents ++;
+
+    perf_event_id id;
+    if (ioctl(fd, PERF_EVENT_IOC_ID, &id) < 0)
+        die("perf/IOC_ID");
+    return id;
 }
 
 // Resets and starts the perf measurement
 void perf_event_start(struct perf_handle *p) {
-    // FIXME: PERF_EVENT_IOC_{RESET, ENABLE}
+    // Reset and enable the event group
+    ioctl(p->group_fd, PERF_EVENT_IOC_RESET,  PERF_IOC_FLAG_GROUP);
+    ioctl(p->group_fd, PERF_EVENT_IOC_ENABLE, PERF_IOC_FLAG_GROUP);
 }
 
 // Stops the perf measurement and reads out the event
 void perf_event_stop(struct perf_handle *p) {
-    // FIXME: PERF_EVENT_IOC_DISABLE
-    // FIXME: Read event from the group_fd into an allocated buffer
+    // Stop the tracing for the whole event group
+    ioctl(p->group_fd, PERF_EVENT_IOC_DISABLE, PERF_IOC_FLAG_GROUP);
+
+    // Allocate a read_format buffer if not done yet.
+    if (p->rf == NULL) {
+        p->rf_size = sizeof(uint64_t) + 2 * p->nevents * sizeof(uint64_t);
+        p->rf = malloc(p->rf_size);
+    }
+
+    // get the event from the kernel. Our buffer should be sized exactly righ
+    if (read(p->group_fd, p->rf, p->rf_size) < 0)
+        die("read");
 }
 
 
 // After the measurement, this helper extracts the event counter for
 // the given perf_event_id (which was returned by perf_event_add)
 uint64_t perf_event_get(struct perf_handle *p, perf_event_id id) {
+    for (unsigned i = 0; i < p->rf->nr; i++) {
+        if (p->rf->values[i].id == id) {
+            return p->rf->values[i].value;
+        }
+    }
     return -1;
 }
 
@@ -96,16 +133,42 @@ int main(int argc, char* argv[]) {
     size_t msize = sizeof(double) * dim * dim;
     printf("matrix_size: %.2f MiB\n", msize / (1024.0 * 1024.0));
 
-    // We provide you with two matrix multiply implementations (see
-    // matrix.c). The optimized variant was created by Ulrich Drepper
-    // and is optimized for cache usage. For a detailed discussion,
-    // we refer you to
-    //
-    // "What Every Programmer Should Know About Memory", Ulrich Drepper, 2007,
-    // https://www.akkadia.org/drepper/cpumemory.pdf
+    // Create and initialize a new perf handle
+    struct perf_handle p;
+    memset(&p, 0, sizeof(p));
 
-    matrixmul_drepper(dim, A, B, C0);
-    matrixmul_naive(dim, A, B, C1);
+    // Create three new perf events that we want to monitor for our
+    // matrix multiplication algorithms
+    perf_event_id id_instrs =
+        perf_event_add(&p, PERF_TYPE_HARDWARE, PERF_COUNT_HW_INSTRUCTIONS);
+    perf_event_id id_cycles =
+        perf_event_add(&p, PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES);
+    perf_event_id id_cache_miss =
+        perf_event_add(&p, PERF_TYPE_HARDWARE, PERF_COUNT_HW_CACHE_REFERENCES);
+
+    // Define an anonymous struct type to make our measurement code easier to read
+    struct {
+        char *name;
+        void (*func)(unsigned, double *, double *, double*);
+        double *result;
+    } algorithms[] = {
+        {"drepper", &matrixmul_drepper, C0},
+        {"naive",   &matrixmul_naive,   C1},
+    };
+
+    for (unsigned i = 0; i < ARRAY_SIZE(algorithms); i++) {
+        // Execute the matrix multiplication under perf tracing
+        perf_event_start(&p);
+        algorithms[i].func(dim, A, B, algorithms[i].result);
+        perf_event_stop(&p);
+
+        // Print out the results as a single line
+        double instrs = perf_event_get(&p, id_instrs) / 1e6;
+        double cycles = perf_event_get(&p, id_cycles) / 1e6;
+        double misses = perf_event_get(&p, id_cache_miss) / 1e6;
+        printf("%-10s %8.2fM instr, %8.2f instr-per-cycle, %8.2f miss-per-instr\n",
+               algorithms[i].name, instrs, instrs/cycles, misses / instrs);
+    }
 
     // Sanity Checking: are both result matrices equal (with a margin of 0.1%) ?
     for (unsigned i = 0; i < (dim*dim); i++) {
