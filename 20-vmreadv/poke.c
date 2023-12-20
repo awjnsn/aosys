@@ -13,8 +13,22 @@
 // Read memory from pid's memory, starting at ptr and len bytes.
 // Returns an heap-allocated buffer
 void *peek(pid_t pid, const void *ptr, size_t len) {
-    // FIXME: process_vm_readv(2)
-    return NULL;
+    struct iovec local[1];
+    struct iovec remote[1];
+
+    void    * buffer = malloc(len);
+    if (!buffer) die("malloc");
+
+    remote[0].iov_base = (void*)ptr;
+    remote[0].iov_len = len;
+    local[0].iov_base = buffer;
+    local[0].iov_len = len;
+
+    ssize_t nread = process_vm_readv(pid, local, 1, remote, 1, 0);
+    if (nread != len)
+        die("process_vm_readv");
+
+    return buffer;
 }
 
 // Copy memory from this process to the remote process (pid).
@@ -22,7 +36,17 @@ void *peek(pid_t pid, const void *ptr, size_t len) {
 // Local  Address: buffer
 // Length: len
 void poke(pid_t pid, void *ptr, void *buffer, size_t len) {
-    // FIXME: process_vm_writev(2)
+    struct iovec local[1];
+    struct iovec remote[1];
+
+    remote[0].iov_base = ptr;
+    remote[0].iov_len = len;
+    local[0].iov_base = buffer;
+    local[0].iov_len = len;
+
+    ssize_t nread = process_vm_writev(pid, local, 1, remote, 1, 0);
+    if (nread != len)
+        die("process_vm_readv");
 }
 
 int main(int argc, char* argv[]) {
@@ -35,17 +59,39 @@ int main(int argc, char* argv[]) {
     int n = sscanf(argv[2], "0x%p", &ptr);
     if (n != 1) die("sscanf");
 
-    // FIXME: Read the PyObject obj in remote process (pid, ptr)
-    // FIXME: Extract the type name (Py_TYPE(obj)->tp_name
-    // FIXME: If "float" PyFloatObject: square ob_fvalue
-    // FIXME: If "int"   PyLongObject:  set the lowest 2 bytes to 0xabba
+    // We get the object, which contains a pointer to its type object
+    PyObject *obj      = peek(pid, ptr, sizeof(PyObject));
+    // Get the type object
+    PyTypeObject *type = peek(pid, Py_TYPE(obj), sizeof(PyTypeObject));
+    // Get (parts of) the type name
+    char *typename     = peek(pid, type->tp_name, 16);
+    typename[15] = 0; // Make sure we have an zero terminated string
 
-    // Example output of make run (two invocations of poke):
-    // pointers ['0x7f6050b5da90', '0x7f60507cd410', '0x7f60507cd410']
-    // objects ['0xdeadbeef', 23.0, 23.0]
-    //    PyObject @ 0x7f6050b5da90: refcount=3, type=int
-    //    PyLongObject: ob_digit[0] = 0x1eadbeef
-    //    PyObject @ 0x7f60507cd410: refcount=4, type=float
-    //    PyFloatObject: ob_fval=23.000000
-    // object ['0xdeadabba', 529.0, 529.0]
+    // Some debug output
+    printf("  PyObject @ %p: refcount=%ld, type=%s\n", ptr, Py_REFCNT(obj), typename);
+
+    if (strcmp(typename, "float") == 0) {
+        // If we have a float, we peek the object again with the correct size
+        PyFloatObject *D = peek(pid, ptr, sizeof(PyFloatObject));
+
+        // Print the floating point value
+        printf("  PyFloatObject: ob_fval=%f\n", D->ob_fval);
+
+        // Square the value
+        D->ob_fval *= D->ob_fval;
+
+        // Write the object back to python memory
+        poke(pid, ptr, D, sizeof(PyFloatObject));
+    }
+
+    if (strcmp(typename, "int") == 0) {
+        // Same procedure for PyLongObject. Noteworthy here is, that
+        // Python supports arbitrary large integers. However, we only
+        // manipulate the lower 16 bits here.
+        PyLongObject *L = peek(pid, ptr, sizeof(PyLongObject));
+        printf("  PyLongObject: ob_digit[0] = 0x%x\n", L->ob_digit[0]);
+        L->ob_digit[0] &= ~0xffff;
+        L->ob_digit[0] |= 0xabba;
+        poke(pid, ptr, L, sizeof(PyLongObject));
+    }
 }
