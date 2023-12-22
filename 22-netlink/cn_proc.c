@@ -33,7 +33,25 @@ static char *execname(pid_t pid, char *buf, size_t bufsize) {
 // and "connect" it. Please note that these sockets are not
 // connect(2)'ed, but we bind it to the correct sockaddr_nl address.
 int cn_proc_connect() {
-    return -1;
+    // Create a netlink socket. Datagram-oriented is just fine here.
+    int sock = socket(PF_NETLINK, SOCK_DGRAM, NETLINK_CONNECTOR);
+    if (sock < 0) die("socket");
+
+    // We bind the socket to the given CN (connector netlink) address.
+    struct sockaddr_nl addr;
+    addr.nl_family = AF_NETLINK;
+    addr.nl_groups = CN_IDX_PROC; // The cn_proc multicast group
+
+    // nl_pid is special: It is the unique identifier of our netlink
+    // socket (like a UDP port). By setting it to 0, we let the
+    // kernel assign an unique address. See netlink(7), nl_link
+    addr.nl_pid  = 0;
+
+    // Bind the socket! Addr: AF_NETLINK, mcast-group CN_IDX_PROC, our unique id: by kernel
+    if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+        die("bind");
+
+    return sock;
 }
 
 // Without configuration, the Linux kernel does not create
@@ -59,16 +77,76 @@ void cn_proc_configure(int sock_fd, bool enable) {
     // transport.
     // The padding is: NLMSG_LENGTH(0) - sizeof(struct nlmsghdr)
     
-    // FIXME: Initialize struct nlmsghdr, struct cn_msg, and struct proc_cn_mcast_op
-    // FIXME: Create an iovec with 4 elements (don't forget the padding)
-    // FIXME: You can send the message with writev(2)
+    // The mcast operation.
+    enum proc_cn_mcast_op mcast =
+        enable ? PROC_CN_MCAST_LISTEN : PROC_CN_MCAST_IGNORE;
+
+    // The connector message header indicates that this message is
+    // directed at the cn_proc component
+    struct cn_msg cn_hdr = {
+        .id = {.idx = CN_IDX_PROC, .val = CN_VAL_PROC },
+        .seq = 0, .ack = 0,
+        .len = sizeof(mcast), // Length of the following payload
+    };
+
+    // The netlink header
+    struct nlmsghdr nl_hdr = {
+        // Length of the following payload
+        .nlmsg_len =  NLMSG_LENGTH(sizeof(cn_hdr) + sizeof(mcast)),
+        // Last (and first) part of this message
+        .nlmsg_type  = NLMSG_DONE, 
+    };
+
+    // On some architectures, a few padding bytes are required between
+    // the netlink header and the netlink payload. On amd64, you get
+    // away with forgetting this.
+    char padding[NLMSG_LENGTH(0) - sizeof(struct nlmsghdr)];
+
+    // A scattered iovec that assembles the netlink message
+    struct iovec vec[] = {
+        { .iov_base = &nl_hdr,  .iov_len=sizeof(nl_hdr)  }, // 1.
+        { .iov_base = &padding, .iov_len=sizeof(padding) }, // 2.
+        { .iov_base = &cn_hdr,  .iov_len=sizeof(cn_hdr)  }, // 3.
+        { .iov_base = &mcast,   .iov_len=sizeof(mcast)   }  // 4.
+    };
+
+    // Send it to the kernel
+    if (writev(sock_fd, vec, sizeof(vec)/sizeof(*vec)) != nl_hdr.nlmsg_len)
+        die("sendmsg");
+
 }
 
 // This function handles a single cn_proc event and prints it to the terminal
 void cn_proc_handle(struct proc_event *ev) {
     // See /usr/include/linux/cn_proc.h for details
 
-    printf("ev->what: %d\n", ev->what);
+    char buf[256]; // Buffer for execname
+
+    switch(ev->what){
+    case PROC_EVENT_FORK:
+        printf("fork(): %20s (%d, %d) -> (%d, %d)\n",
+               execname(ev->event_data.fork.parent_tgid, buf, sizeof(buf)),
+               ev->event_data.fork.parent_tgid,
+               ev->event_data.fork.parent_pid,
+               ev->event_data.fork.child_tgid,
+               ev->event_data.fork.child_pid);
+        break;
+    case PROC_EVENT_EXEC:
+        printf("exec(): %20s (%d, %d)\n",
+               execname(ev->event_data.exec.process_tgid, buf, sizeof(buf)),
+               ev->event_data.exec.process_tgid,
+               ev->event_data.exec.process_pid);
+        break;
+    case PROC_EVENT_EXIT:
+        printf("exit(): %20s (%d, %d) -> rc=%d\n",
+               "",
+               ev->event_data.exit.process_tgid,
+               ev->event_data.exit.process_pid,
+               ev->event_data.exit.exit_code);
+        break;
+    default:
+        break;
+    }
 }
 
 
@@ -87,8 +165,39 @@ int main(int argc, char **argv) {
         return -1;
     }
 
-    // FIXME: Create cn_proc socket and enable mcast
-    // FIXME: recv(2) data from the socket and iterate over nl message (see netlink(7))
-    // FIXME: For NLMSG_DONE messages, invoke cn_proc_handle on the (struct proc_event*)cn_hdr->data
+    // Create a cn_proc socket and enable the mcast group
+    cn_proc_fd = cn_proc_connect();
+    atexit(cn_proc_atexit);
+    cn_proc_configure(cn_proc_fd, true);
+
+    // Receive events from the kernel
+    while (true) {
+        // Get multiple netlink messages from the kernel
+        char buf[4096];
+        int len = recv(cn_proc_fd, buf, sizeof(buf), 0);
+        if (len < 0) die("recv");
+
+        // Iterate over the netlink messages in the buffer. For this,
+        // we use the helper macros from netlink(3) as netlink message
+        // are weirdly (with padding) within the receive buffer
+        for (/* init */ struct nlmsghdr *nlh = (struct nlmsghdr *) buf;
+             /* cond */ NLMSG_OK (nlh, len); 
+             /* next */ nlh = NLMSG_NEXT (nlh, len)) {
+
+            // Only complete messages (ignore NOOP, ERROR, OVERRUN, whatever)
+            if (nlh->nlmsg_type != NLMSG_DONE)
+                continue;
+
+            // All messages should come from cn_proc, but you never
+            // can be sure.
+            struct cn_msg *cn_msg = NLMSG_DATA(nlh);
+            if ((cn_msg->id.idx != CN_IDX_PROC)
+                || (cn_msg->id.val != CN_VAL_PROC))
+                continue;
+
+            // cn_msg->data contains a single proc_event
+            cn_proc_handle((struct proc_event*)cn_msg->data);
+        }
+    }
     return 0;
 }
