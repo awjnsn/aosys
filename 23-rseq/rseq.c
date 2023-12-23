@@ -102,7 +102,9 @@ int operation_lock(struct rseq*_, struct cacheline *counters) {
 
 // Variant that uses getcpu() + atomic_fetch_add
 int operation_atomic(struct rseq* _, struct cacheline *counters) {
-    // FIXME: Implement variant
+    unsigned int cpu_id;
+    getcpu(&cpu_id, NULL);
+    atomic_fetch_add(&counters[cpu_id].counter, 1);
 
     return 0;
 }
@@ -111,7 +113,8 @@ int operation_atomic(struct rseq* _, struct cacheline *counters) {
 // restartable sequence to retrieve the cpu id.
 // Please look at /usr/include/linux/rseq.h for the documentation of struct rseq
 int operation_rseq_atomic(struct rseq* rs, struct cacheline *counters) {
-    // FIXME: Implement variant
+    unsigned int cpu_id = rs->cpu_id;
+    atomic_fetch_add(&counters[cpu_id].counter, 1);
 
     return 0;
 }
@@ -120,7 +123,6 @@ int operation_rseq_atomic(struct rseq* rs, struct cacheline *counters) {
 // Variant that uses no atomic operations and fully relies on rseq
 // This variant is implemented in assembler (see rseq.S)
 extern int operation_rseq(struct rseq *, struct cacheline*);
-// FIXME: Implement counter_rseq in rseq.S
 
 
 ////////////////////////////////////////////////////////////////

@@ -16,14 +16,16 @@ operation_rseq:
         // to the kernel-registered rseq object.
         // After an abort, we also jump to this label (restart_ip)
 .restart_ip:
-        // FIXME: Update rseq->rseq_cs
+	lea	operation_rseq_cs(%rip), %rcx // %rcx = &operation_rseq_cs
+	mov	%rcx, 8(%rdi)               // rseq->rseq_cs = %rcx
 
         // The restartable sequence
         // Implements: [rseq->cpu_id].counter ++;
 .start_ip: // Start of restartable sequence
-        // HINT: Structure of rseq is documented in /usr/include/linux/rseq.h
-        // HINT: rseq->cpu_id == 4(%rdi)
-        // HINT: Each counter-cache-line is 64 bytes lon
+	mov	4(%rdi), %ecx // %rcx = rseq->cpu_id
+	sal	$6, %rcx      // %rcx = %rcx * 64
+	add	%rsi, %rcx    // %rcx = counters + %rcx
+	addq	$1, (%rcx)    // *%rcx = *rcx + 1
 .end_ip: // End of restartable sequence
 	ret
 
@@ -36,7 +38,7 @@ operation_rseq:
 	.byte 0x0f, 0xb9, 0x3d
 	.long 0x53053053       // RSEQ_SIG
 .abort_ip: // On abort, the kernel will jump here
-        // FIXME: count aborts in %eax
+	add	$1, %eax // %eax += 1
 	jmp .restart_ip
 
 // } End of operation_rseq()
