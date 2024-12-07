@@ -1,7 +1,7 @@
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/inotify.h>
-#include <stdbool.h>
 #include <unistd.h>
 
 /* With each inotify event, the kernel supplies us with a bit mask
@@ -21,7 +21,8 @@
    VARNAME     = inotify_event_flags
    INITIALIZER = { { IN_ACCESS, ...}, ...}
  */
-struct {
+struct
+{
     int mask;
     char *name;
 } inotify_event_flags[] = {
@@ -46,13 +47,15 @@ struct {
 };
 
 // We already know this macro from yesterday.
-#define ARRAY_SIZE(arr) (sizeof(arr)/sizeof(*(arr)))
+#define ARRAY_SIZE(arr) (sizeof(arr) / sizeof(*(arr)))
 
-int main(void) {
+int main(void)
+{
     // We allocate a buffer to hold the inotify events, which are
     // variable in size.
     void *buffer = malloc(4096);
-    if (!buffer) return -1;
+    if (!buffer)
+        return -1;
 
     // FIXME: Create Inotify Object (into inotify_fd)
     // FIXME: Add new watch to that event (result into watch_fd)

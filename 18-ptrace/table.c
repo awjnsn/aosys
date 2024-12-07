@@ -1,6 +1,7 @@
-struct syscall_name {
+struct syscall_name
+{
     int nr;
-    char * name;
+    char *name;
     int argc;
 };
 

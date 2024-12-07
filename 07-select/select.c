@@ -1,20 +1,26 @@
 #define _GNU_SOURCE
-#include <stdio.h>
-#include <spawn.h>
-#include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdbool.h>
 #include <pthread.h>
+#include <spawn.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
-#define die(msg) do { perror(msg); exit(EXIT_FAILURE); } while(0)
+#define die(msg)                                                               \
+    do                                                                         \
+    {                                                                          \
+        perror(msg);                                                           \
+        exit(EXIT_FAILURE);                                                    \
+    } while (0)
 
 /* For each filter process, we will generate a proc object */
-struct proc {
+struct proc
+{
     char *cmd;  // command line
     pid_t pid;  // process id of running process. 0 if exited
     int stdin;  // stdin file descriptor of process (pipe)
@@ -35,7 +41,8 @@ static struct proc *procs; // Dynamically-allocated array of procs
 //
 // We also start the process wrapped by stdbuf(1) to force
 // line-buffered stdio for a more interactive experience on the terminal
-static int start_proc(struct proc *proc) {
+static int start_proc(struct proc *proc)
+{
     // We build an array for execv that uses the shell to execute the
     // given command. Furthermore, we use the stdbuf tool to start the
     // filter with line-buffered output.
@@ -46,14 +53,16 @@ static int start_proc(struct proc *proc) {
     //       Therefore we have to define _GNU_SOURCE at the top.
     char *stdbuf_cmd;
     asprintf(&stdbuf_cmd, "stdbuf -oL %s", proc->cmd);
-    char *argv[] = {"sh", "-c", stdbuf_cmd, 0 };
+    char *argv[] = {"sh", "-c", stdbuf_cmd, 0};
 
     // We create two pipe pairs, where [0] is the reading end
     // and [1] the writing end of the pair. We also set the O_CLOEXEC
     // flag to close both descriptors when the child process is exec'ed.
     int stdin[2], stdout[2];
-    if (pipe2(stdin,  O_CLOEXEC)) return -1;
-    if (pipe2(stdout, O_CLOEXEC)) return -1;
+    if (pipe2(stdin, O_CLOEXEC))
+        return -1;
+    if (pipe2(stdout, O_CLOEXEC))
+        return -1;
 
     // For starting the filter, we use posix_spawn, which gives us an
     // interface around fork+exec to perform standard process
@@ -64,7 +73,7 @@ static int start_proc(struct proc *proc) {
     //     dup2(stdin[0], STDIN_FILENO);
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
-    posix_spawn_file_actions_adddup2(&fa, stdin[0],  STDIN_FILENO);
+    posix_spawn_file_actions_adddup2(&fa, stdin[0], STDIN_FILENO);
     posix_spawn_file_actions_adddup2(&fa, stdout[1], STDOUT_FILENO);
 
     // "magic variable": array of pointers to environment variables.
@@ -73,7 +82,8 @@ static int start_proc(struct proc *proc) {
 
     // We spawn the filter process.
     int e;
-    if (!(e = posix_spawn(&proc->pid, "/bin/sh", &fa, 0, argv,  environ))) {
+    if (!(e = posix_spawn(&proc->pid, "/bin/sh", &fa, 0, argv, environ)))
+    {
         // On success, we free the allocated memory.
         posix_spawn_file_actions_destroy(&fa);
         free(stdbuf_cmd);
@@ -91,7 +101,9 @@ static int start_proc(struct proc *proc) {
         close(stdout[1]);         // write end
 
         return 0;
-	} else {
+    }
+    else
+    {
         // posix_spawn failed.
         errno = e;
         free(stdbuf_cmd);
@@ -99,27 +111,31 @@ static int start_proc(struct proc *proc) {
     }
 }
 
-
-
-int main(int argc, char *argv[]) {
-    if (argc <= 1) {
+int main(int argc, char *argv[])
+{
+    if (argc <= 1)
+    {
         fprintf(stderr, "usage: %s [CMD-1] (<CMD-2> <CMD-3> ...)", argv[0]);
         return -1;
     }
 
     // We allocate an array of proc objects
     nprocs = argc - 1;
-    procs   = malloc(nprocs * sizeof(struct proc));
-    if (!procs) die("malloc");
+    procs = malloc(nprocs * sizeof(struct proc));
+    if (!procs)
+        die("malloc");
 
     // Initialize proc objects and start the filter
-    for (int i = 0; i < nprocs; i++) {
-        procs[i].cmd  = argv[i+1];
+    for (int i = 0; i < nprocs; i++)
+    {
+        procs[i].cmd = argv[i + 1];
         procs[i].last_char = '\n';
         int rc = start_proc(&procs[i]);
-        if (rc < 0) die("start_filter");
+        if (rc < 0)
+            die("start_filter");
 
-        fprintf(stderr, "[%s] Started filter as pid %d\n", procs[i].cmd, procs[i].pid);
+        fprintf(stderr, "[%s] Started filter as pid %d\n", procs[i].cmd,
+                procs[i].pid);
     }
 
     // FIXME: Read from stdin and push data to the proc[*].stdin

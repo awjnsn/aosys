@@ -1,11 +1,11 @@
-#include <sys/types.h>
-#include <sys/stat.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <errno.h>
-#include <unistd.h>
-#include <sys/mman.h>
 #include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 // We define a CPP macro to hide the ugliness of compiler attributes.
 //
@@ -18,7 +18,8 @@
 
 // This is anonymous struct describes our persistent data and a
 // variable with that type, named psec, is defined.
-struct /* anonymous */ {
+struct /* anonymous */
+{
     // We mark the first variable in our struct as being page aligned.
     // This is equivalent to a start address an address ending in 3
     // hexadecimal zeros.
@@ -32,8 +33,8 @@ struct /* anonymous */ {
     //    arithmetik work correctly.
     page_aligned int persistent_start;
 
-   // This is our persistent variable. We will use it as a counter,
-   // how often the program was executed.
+    // This is our persistent variable. We will use it as a counter,
+    // how often the program was executed.
     int foobar;
 } psec;
 
@@ -41,15 +42,18 @@ struct /* anonymous */ {
 // initialized from the program ELF on every program start.
 int barfoo = 42;
 
-int setup_persistent(char *fn) {
+int setup_persistent(char *fn)
+{
     // FIXME: Install persistent mapping and return 0;
     return -1;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     printf("psec: %p--%p\n", &psec, &psec + 1);
     // Install the persistent mapping
-    if (setup_persistent("mmap.persistent") == -1) {
+    if (setup_persistent("mmap.persistent") == -1)
+    {
         perror("setup_persistent");
         return -1;
     }
@@ -61,7 +65,7 @@ int main(int argc, char *argv[]) {
     printf("foobar(%p) = %d\n", &psec.foobar, psec.foobar++);
     printf("barfoo(%p) = %d\n", &barfoo, barfoo++);
 
-    {// This is ugly and you should not do this in production code.
+    { // This is ugly and you should not do this in production code.
 
         // In order to see the memory mappings of the currently
         // running process, we use the pmap (for process-map) tool to

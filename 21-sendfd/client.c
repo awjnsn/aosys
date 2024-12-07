@@ -1,14 +1,18 @@
-#include <sys/socket.h>
-#include <sys/signalfd.h>
-#include <sys/un.h>
+#include <signal.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/signalfd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
-#include <stdbool.h>
-#include <signal.h>
 
-
-#define die(msg) do { perror(msg); exit(EXIT_FAILURE); } while(0)
+#define die(msg)                                                               \
+    do                                                                         \
+    {                                                                          \
+        perror(msg);                                                           \
+        exit(EXIT_FAILURE);                                                    \
+    } while (0)
 
 // Receive a message with an attached file descriptor from a
 // connected UNIX domain socket. The message is stored in the buffer,
@@ -18,13 +22,16 @@
 // sock_fd:      Connected UNIX domain socket
 // buf, bufsize: Buffer for the received message
 // fd:           Where to store the file descriptor
-int recvfd(int sock_fd, char *buf, size_t bufsize, int *fd) {
+int recvfd(int sock_fd, char *buf, size_t bufsize, int *fd)
+{
     return 0;
 }
 
-int main(int argc, char *argv[]) {
+int main(int argc, char *argv[])
+{
     // FIXME: Create a socket(2) with AF_UNIX, SOCK_SEQPACKET
     // FIXME: Connect to the domain socket "./socket"
     // FIXME: Receive the file descriptor with recvfd()
-    // FIXME: Add a read/write loop that transfers data from your stdin to the received file descriptor (like cat)
+    // FIXME: Add a read/write loop that transfers data from your stdin to the
+    // received file descriptor (like cat)
 }

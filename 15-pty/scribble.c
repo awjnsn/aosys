@@ -1,27 +1,31 @@
 #define _GNU_SOURCE
-#include <stdio.h>
-#include <spawn.h>
-#include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdbool.h>
 #include <pthread.h>
-#include <sys/types.h>
+#include <spawn.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
-#include <stdlib.h>
 
-#define die(msg) do { perror(msg); exit(EXIT_FAILURE); } while(0)
+#define die(msg)                                                               \
+    do                                                                         \
+    {                                                                          \
+        perror(msg);                                                           \
+        exit(EXIT_FAILURE);                                                    \
+    } while (0)
 
 // This function starts a program within a PTY by setting the process'
 // stdin, stdout, and stderr to the same pseudo terminal file
 // descriptor. Please note that pty_fd is the open file descriptor of
 // the child (e.g. /dev/pts/7)
-static pid_t exec_in_pty(char *argv[], int pty_fd) {
+static pid_t exec_in_pty(char *argv[], int pty_fd)
+{
     // We use posix_spawnp(3) to perform the process creation. For the
     // redirection of std{in,out,err}, we use a file action which
     // performs a dup(2) *after* the fork. For details, please look at
@@ -33,7 +37,6 @@ static pid_t exec_in_pty(char *argv[], int pty_fd) {
     posix_spawn_file_actions_adddup2(&fa, pty_fd, STDIN_FILENO);
     posix_spawn_file_actions_adddup2(&fa, pty_fd, STDOUT_FILENO);
     posix_spawn_file_actions_adddup2(&fa, pty_fd, STDERR_FILENO);
-
 
     // In order to allow shells within our pseudo terminal, we have to
     // spawn the new process as a new session leader. While this is an
@@ -55,7 +58,7 @@ static pid_t exec_in_pty(char *argv[], int pty_fd) {
     //
     // ./scribble OUT IN /bin/bash
     pid_t pid;
-    if (posix_spawnp(&pid, argv[0], &fa, &attr, argv,  environ) != 0)
+    if (posix_spawnp(&pid, argv[0], &fa, &attr, argv, environ) != 0)
         die("posix_spawn");
 
     // Cleanup everything
@@ -71,12 +74,14 @@ static pid_t exec_in_pty(char *argv[], int pty_fd) {
 static struct termios orig_termios; // <- We store the old configuration
 
 // Restore the original termios setting
-void restore_terminal() {
+void restore_terminal()
+{
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
 }
 
 // Configure our terminal
-void configure_terminal() {
+void configure_terminal()
+{
     // Credits go to:
     // https://viewsourcecode.org/snaptoken/kilo/02.enteringRawMode.html
     // see also termios(3)
@@ -87,28 +92,32 @@ void configure_terminal() {
     atexit(restore_terminal);
 
     // We delete the flags and configure the terminal
-    // ~ECHO:   Disable direct echoing of input by the terminal 
+    // ~ECHO:   Disable direct echoing of input by the terminal
     // ~ICANON: Disable canonical mode (line buffered, line editing, etc..)
     // ~ISIG:   Disable C-c to send a signal
     struct termios raw = orig_termios;
-    raw.c_lflag &= ~(ECHO | ICANON | ISIG );
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG);
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 }
 
 // FIXME: Create a thread handler body that copies data from src_fd to two
 //        destination file descriptors.
 
-
-int main(int argc, char *argv[]) {
-    if (argc < 4) {
+int main(int argc, char *argv[])
+{
+    if (argc < 4)
+    {
         fprintf(stderr, "usage: %s OUT IN CMD [ARG ...]", argv[0]);
         return -1;
     }
-    char *OUT    = argv[1];
-    char *IN     = argv[2];
-    char **CMD   = &argv[3];
+    char *OUT = argv[1];
+    char *IN = argv[2];
+    char **CMD = &argv[3];
 
-    (void) IN; (void) OUT; (void) CMD; (void) exec_in_pty;
+    (void)IN;
+    (void)OUT;
+    (void)CMD;
+    (void)exec_in_pty;
     // FIXME: Open OUT and IN file
     // FIXME: Create a new primary PTY device (see pty(7))
     // FIXME: Get the PTN with ioctl(fd, TIOCGPTN, &pts)
